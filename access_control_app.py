@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 import io
 import shutil
 
+
 # Utility Functions
 def array_to_blob(array):
     out = io.BytesIO()
@@ -25,9 +26,11 @@ def array_to_blob(array):
     out.seek(0)
     return out.read()
 
+
 def blob_to_array(blob):
     out = io.BytesIO(blob)
     return np.load(out)
+
 
 # Database Initialization
 def init_db():
@@ -44,12 +47,13 @@ def init_db():
                  (id INTEGER PRIMARY KEY, type TEXT, destinataire TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS administrateurs
                  (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT)''')
-    c.execute("INSERT OR IGNORE INTO administrateurs (username, password_hash) VALUES (?, ?)", 
+    c.execute("INSERT OR IGNORE INTO administrateurs (username, password_hash) VALUES (?, ?)",
               ("admin", "admin123"))  # Use proper hashing in production
-    c.execute("INSERT OR IGNORE INTO notifications (type, destinataire) VALUES (?, ?)", 
+    c.execute("INSERT OR IGNORE INTO notifications (type, destinataire) VALUES (?, ?)",
               ("email", "admin@example.com"))
     conn.commit()
     conn.close()
+
 
 # Facial Recognition Functions
 def detect_face(image):
@@ -57,16 +61,19 @@ def detect_face(image):
     faces = face_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     if len(faces) > 0:
         (x, y, w, h) = faces[0]
-        return image[y:y+h, x:x+w], (x, y, w, h)
+        return image[y:y + h, x:x + w], (x, y, w, h)
     return None, None
+
 
 def preprocess(face):
     face = cv2.resize(face, (64, 64))
     face = cv2.equalizeHist(face)
     return face / 255.0
 
+
 def extract_hog_features(image):
     return hog(image, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(2, 2), feature_vector=True)
+
 
 def train_model():
     conn = sqlite3.connect('access_control.db')
@@ -81,19 +88,21 @@ def train_model():
     c.execute("SELECT id, nom FROM utilisateurs")
     label_dict = {row[0]: row[1] for row in c.fetchall()}
     conn.close()
+    print(f"Training with {len(features)} features, unique labels: {set(labels)}")
     if len(set(labels)) < 2:
         print("Need at least two distinct users to train the model.")
         return None, None
     X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.2, random_state=42)
     pipeline = make_pipeline(StandardScaler(), SVC(probability=True))
-    param_grid = {'svc__C': [1, 10], 'svc__kernel': ['rbf'], 'svc__gamma': ['scale']}
-    grid = GridSearchCV(pipeline, param_grid, cv=5, scoring='accuracy')
+    param_grid = {'svc__C': [0.1, 1, 10], 'svc__kernel': ['rbf'], 'svc__gamma': ['scale', 'auto']}
+    grid = GridSearchCV(pipeline, param_grid, cv=5, scoring='accuracy', verbose=1)
     grid.fit(X_train, y_train)
     best_model = grid.best_estimator_
     joblib.dump(best_model, "face_recognition_model.pkl")
     joblib.dump(label_dict, "label_dict.pkl")
     print("Model trained and saved.")
     return best_model, label_dict
+
 
 # Notification Functions
 def send_email(recipient, message):
@@ -107,6 +116,7 @@ def send_email(recipient, message):
             server.send_message(msg)
     except Exception as e:
         print(f"Email sending failed: {e}")
+
 
 def send_notification(type_acces, user_id=None, image_path=None):
     conn = sqlite3.connect('access_control.db')
@@ -123,6 +133,7 @@ def send_notification(type_acces, user_id=None, image_path=None):
         if n_type == "email":
             send_email(dest, message)
 
+
 # Real-Time Recognition
 def real_time_recognition(root, model, label_dict):
     if model is None or label_dict is None:
@@ -132,12 +143,19 @@ def real_time_recognition(root, model, label_dict):
     if not cap.isOpened():
         messagebox.showerror("Error", "Cannot open camera.")
         return
-    confidence_threshold = 0.4  # Lowered for better recognition
+    confidence_threshold = 0.3  # Adjusted for better recognition
 
     def process_frame():
         conn = sqlite3.connect('access_control.db')
         c = conn.cursor()
         try:
+            # Debug: Print label_dict to verify mappings
+            print(f"Label dictionary: {label_dict}")
+            # Fetch all user IDs for verification
+            c.execute("SELECT id FROM utilisateurs")
+            valid_ids = [row[0] for row in c.fetchall()]
+            print(f"Valid user IDs in database: {valid_ids}")
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -150,13 +168,13 @@ def real_time_recognition(root, model, label_dict):
                     feature = extract_hog_features(face_proc).reshape(1, -1)
                     prediction = model.predict(feature)
                     confidence = model.predict_proba(feature).max()
-                    print(f"Confidence: {confidence:.2f}, Predicted ID: {prediction[0]}")  # Debug
+                    user_id = int(prediction[0])
+                    print(f"Confidence: {confidence:.2f}, Predicted ID: {user_id}")  # Debug
                     try:
                         if confidence > confidence_threshold:
-                            user_id = int(prediction[0])
-                            c.execute("SELECT nom, autorise FROM utilisateurs WHERE id= CAST(? AS INTEGER)", (user_id,))
+                            c.execute("SELECT nom, autorise FROM utilisateurs WHERE id=?", (user_id,))
                             result = c.fetchone()
-                            print(result)
+                            print(f"Database query result for ID {user_id}: {result}")
                             if result:
                                 nom, autorise = result
                                 label_text = nom
@@ -169,12 +187,15 @@ def real_time_recognition(root, model, label_dict):
                                 if not autorise:
                                     send_notification("non_autorise", user_id)
                             else:
-                                label_text = "azzzz"
+                                label_text = "Inconnu"
                                 color = (0, 0, 255)
+                                print(f"No user found for ID {user_id}")
                         else:
                             label_text = "Inconnu"
                             color = (0, 0, 255)
-                            image_path = f"imposter/intrusion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                            print(f"Confidence too low: {confidence:.2f}")
+                            image_path = f"intrusion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                            os.makedirs("imposter", exist_ok=True)
                             cv2.imwrite(image_path, frame)
                             c.execute("INSERT INTO acces (date_heure, type, image_path) VALUES (?, ?, ?)",
                                       (datetime.now(), "imposteur", image_path))
@@ -198,6 +219,7 @@ def real_time_recognition(root, model, label_dict):
             cv2.destroyAllWindows()
 
     threading.Thread(target=process_frame, daemon=True).start()
+
 
 # GUI Application
 class AccessControlApp:
@@ -261,13 +283,46 @@ class AccessControlApp:
         # History Tab
         hist_frame = ttk.Frame(notebook)
         notebook.add(hist_frame, text="History")
-        self.hist_tree = ttk.Treeview(hist_frame, columns=("ID", "UserID", "DateTime", "Type", "Image"), show="headings")
+
+        # Search Frame
+        search_frame = ttk.Frame(hist_frame)
+        search_frame.pack(fill=tk.X, pady=5)
+        tk.Label(search_frame, text="Search by User ID:").pack(side=tk.LEFT)
+        self.search_id_entry = tk.Entry(search_frame, width=10)
+        self.search_id_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(search_frame, text="Search by Name:").pack(side=tk.LEFT)
+        self.search_name_entry = tk.Entry(search_frame, width=20)
+        self.search_name_entry.pack(side=tk.LEFT, padx=5)
+        tk.Button(search_frame, text="Search", command=self.load_history).pack(side=tk.LEFT, padx=5)
+        tk.Button(search_frame, text="Clear Search", command=self.clear_search).pack(side=tk.LEFT, padx=5)
+
+        # Treeview with Scrollbar
+        tree_frame = ttk.Frame(hist_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.hist_tree = ttk.Treeview(tree_frame, columns=("ID", "UserID", "Name", "DateTime", "Type", "Image"),
+                                      show="headings")
         self.hist_tree.heading("ID", text="ID")
         self.hist_tree.heading("UserID", text="User ID")
+        self.hist_tree.heading("Name", text="Name")
         self.hist_tree.heading("DateTime", text="Date/Time")
         self.hist_tree.heading("Type", text="Type")
         self.hist_tree.heading("Image", text="Image Path")
-        self.hist_tree.pack()
+        self.hist_tree.column("ID", width=50)
+        self.hist_tree.column("UserID", width=50)
+        self.hist_tree.column("Name", width=100)
+        self.hist_tree.column("DateTime", width=150)
+        self.hist_tree.column("Type", width=100)
+        self.hist_tree.column("Image", width=200)
+
+        # Add Scrollbar
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.hist_tree.yview)
+        self.hist_tree.configure(yscrollcommand=scrollbar.set)
+        self.hist_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Delete Button
+        tk.Button(hist_frame, text="Delete Selected", command=self.delete_history_entry).pack(pady=5)
+
         self.load_history()
 
         # Train Model Tab
@@ -290,10 +345,47 @@ class AccessControlApp:
             self.hist_tree.delete(item)
         conn = sqlite3.connect('access_control.db')
         c = conn.cursor()
-        c.execute("SELECT id, utilisateur_id, date_heure, type, image_path FROM acces")
+
+        query = """
+        SELECT a.id, a.utilisateur_id, u.nom, a.date_heure, a.type, a.image_path
+        FROM acces a
+        LEFT JOIN utilisateurs u ON a.utilisateur_id = u.id
+        WHERE 1=1
+        """
+        params = []
+
+        user_id = self.search_id_entry.get().strip()
+        name = self.search_name_entry.get().strip()
+        if user_id:
+            query += " AND a.utilisateur_id = ?"
+            params.append(user_id)
+        if name:
+            query += " AND u.nom LIKE ?"
+            params.append(f"%{name}%")
+
+        c.execute(query, params)
         for row in c.fetchall():
             self.hist_tree.insert("", "end", values=row)
         conn.close()
+
+    def clear_search(self):
+        self.search_id_entry.delete(0, tk.END)
+        self.search_name_entry.delete(0, tk.END)
+        self.load_history()
+
+    def delete_history_entry(self):
+        selected = self.hist_tree.selection()
+        if not selected:
+            messagebox.showerror("Error", "Select a history entry to delete")
+            return
+        conn = sqlite3.connect('access_control.db')
+        c = conn.cursor()
+        for item in selected:
+            entry_id = self.hist_tree.item(item, "values")[0]
+            c.execute("DELETE FROM acces WHERE id=?", (entry_id,))
+        conn.commit()
+        conn.close()
+        self.load_history()
 
     def add_user_window(self):
         win = tk.Toplevel(self.root)
@@ -303,7 +395,8 @@ class AccessControlApp:
         name_entry.pack()
         auth_var = tk.BooleanVar(value=True)
         tk.Checkbutton(win, text="Authorized", variable=auth_var).pack()
-        tk.Button(win, text="Save", command=lambda: self.save_user_and_capture(name_entry.get(), auth_var.get(), win)).pack()
+        tk.Button(win, text="Save",
+                  command=lambda: self.save_user_and_capture(name_entry.get(), auth_var.get(), win)).pack()
 
     def save_user_and_capture(self, name, authorized, window):
         if not name:
@@ -344,7 +437,8 @@ class AccessControlApp:
                         face_proc = preprocess(face)
                         feature = extract_hog_features(face_proc)
                         feature_blob = array_to_blob(feature)
-                        c.execute("INSERT INTO user_features (user_id, feature_vector) VALUES (?, ?)", (user_id, feature_blob))
+                        c.execute("INSERT INTO user_features (user_id, feature_vector) VALUES (?, ?)",
+                                  (user_id, feature_blob))
                         conn.commit()
                         count += 1
                 elif key == ord('q'):
@@ -375,7 +469,8 @@ class AccessControlApp:
         auth_var = tk.BooleanVar(value=auth)
         tk.Checkbutton(win, text="Authorized", variable=auth_var).pack()
         tk.Button(win, text="Update Images", command=lambda: self.update_user_images(user_id)).pack()
-        tk.Button(win, text="Save", command=lambda: self.update_user(user_id, name_entry.get(), auth_var.get(), win)).pack()
+        tk.Button(win, text="Save",
+                  command=lambda: self.update_user(user_id, name_entry.get(), auth_var.get(), win)).pack()
 
     def update_user_images(self, user_id):
         conn = sqlite3.connect('access_control.db')
@@ -431,6 +526,7 @@ class AccessControlApp:
                     messagebox.showinfo("Info", "Model training completed")
             except Exception as e:
                 messagebox.showerror("Error", f"Training failed: {str(e)}")
+
 
 if __name__ == "__main__":
     init_db()
