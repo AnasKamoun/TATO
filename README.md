@@ -29,7 +29,7 @@ Write permissions for creating directories (dataset, imposter) and database (acc
 Installation
 
 Clone the Repository:
-git clone https://github.com/your-username/your-repo-name.git
+git clone https://github.com/AnasKamoun/TATO.git
 cd your-repo-name
 
 
