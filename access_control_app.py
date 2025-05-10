@@ -418,7 +418,6 @@ class AccessControlApp:
         tk.Label(win, text="Press 'c' to capture a face image, 'q' to quit").pack()
         cap = cv2.VideoCapture(0)
         count = 0
-        os.makedirs(f"dataset/user_{user_id}", exist_ok=True)
         conn = sqlite3.connect('access_control.db')
         c = conn.cursor()
         try:
@@ -432,8 +431,6 @@ class AccessControlApp:
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     face, coords = detect_face(gray)
                     if face is not None:
-                        image_path = f"dataset/user_{user_id}/face_{count}.jpg"
-                        cv2.imwrite(image_path, face)
                         face_proc = preprocess(face)
                         feature = extract_hog_features(face_proc)
                         feature_blob = array_to_blob(feature)
@@ -478,9 +475,6 @@ class AccessControlApp:
         c.execute("DELETE FROM user_features WHERE user_id=?", (user_id,))
         conn.commit()
         conn.close()
-        user_dir = f"dataset/user_{user_id}"
-        if os.path.exists(user_dir):
-            shutil.rmtree(user_dir)
         self.capture_user_images(user_id)
 
     def update_user(self, user_id, name, authorized, window):
@@ -504,9 +498,6 @@ class AccessControlApp:
         c.execute("DELETE FROM user_features WHERE user_id=?", (user_id,))
         conn.commit()
         conn.close()
-        user_dir = f"dataset/user_{user_id}"
-        if os.path.exists(user_dir):
-            shutil.rmtree(user_dir)
         self.load_users()
 
     def train_model_gui(self):
